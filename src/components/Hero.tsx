@@ -7,19 +7,66 @@ interface HeroProps {
   onExploreSignatures: () => void;
   onOpenVideo: () => void;
   onOpenBoxBuilder: () => void;
+  onHeroVideoReady?: () => void;
+  onHeroVideoError?: () => void;
+  isLoaded?: boolean;
 }
+
+const HERO_POSTER =
+  'https://lh3.googleusercontent.com/aida-public/AB6AXuBRkd5ezEIiDkfi32SLRytC3LryvnM9yWk6z2Ia5D0gz8v1Yp6pamIDW31-o0NjRVtZD75orvW9mRebYhBWaoy8BtyZaiUy17POogQH-wAMRQ5nc5e-uf8zwlF7qZ6EiqGlI09cw00ZWRuwLDX7J6wViIk4OF6yor-KwQQeV_oaloVlYxhiywx3IaS8V3s1dlZbeQljM5tV58dh60QwFvuPaDYo4xgYFbOEiVSxPI19vzv2L1FcVuW3SQ';
 
 export const Hero: React.FC<HeroProps> = ({
   onOrderNow,
   onExploreSignatures,
   onOpenVideo,
   onOpenBoxBuilder,
+  onHeroVideoReady,
+  onHeroVideoError,
+  isLoaded = true,
 }) => {
   const headingRef = useRef<HTMLDivElement>(null);
   const mediaRef = useRef<HTMLDivElement>(null);
   const metaRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoError, setVideoError] = React.useState(false);
 
+  // Play video only when Hero section is visible, saving GPU/CPU memory
   useEffect(() => {
+    const video = videoRef.current;
+    const media = mediaRef.current;
+    if (!video || !media) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            video.play().catch(() => {});
+          } else {
+            video.pause();
+          }
+        });
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(media);
+    return () => observer.disconnect();
+  }, []);
+
+  // Check if video is already cached and ready to play
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.readyState >= 3) {
+      onHeroVideoReady?.();
+    }
+  }, [onHeroVideoReady]);
+
+  // Synchronize GSAP entrance reveal with loader transition
+  useEffect(() => {
+    if (!isLoaded) return;
+
     const ctx = gsap.context(() => {
       // Smooth subtle GSAP reveal
       gsap.from(metaRef.current, {
@@ -39,15 +86,16 @@ export const Hero: React.FC<HeroProps> = ({
 
       gsap.from(mediaRef.current, {
         opacity: 0,
-        scale: 0.97,
-        duration: 1.3,
-        delay: 0.3,
+        scale: 0.98,
+        duration: 1.2,
+        delay: 0.1,
         ease: 'power2.out',
       });
     });
 
     return () => ctx.revert();
-  }, []);
+  }, [isLoaded]);
+
 
   return (
     <section className="relative w-full overflow-hidden bg-[#fff8f1] pt-4 pb-14 md:pb-20">
@@ -119,16 +167,42 @@ export const Hero: React.FC<HeroProps> = ({
           className="relative w-full rounded-2xl overflow-hidden bg-[#2b1712] text-[#fff8f1] shadow-[0_24px_50px_-12px_rgba(43,23,18,0.35)]"
         >
           <div className="aspect-[16/9] md:aspect-[21/9] w-full relative overflow-hidden group">
+            {/* Base Poster Still: ensures no blank frame or flicker during video decoding */}
             <img
-              alt="Cinematic macro editorial film still of a thick, freshly baked Crumbly cookie being slowly broken apart, revealing a steaming molten Nutella and dark Belgian chocolate core oozing outwards."
-              className="w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105 opacity-90"
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuBRkd5ezEIiDkfi32SLRytC3LryvnM9yWk6z2Ia5D0gz8v1Yp6pamIDW31-o0NjRVtZD75orvW9mRebYhBWaoy8BtyZaiUy17POogQH-wAMRQ5nc5e-uf8zwlF7qZ6EiqGlI09cw00ZWRuwLDX7J6wViIk4OF6yor-KwQQeV_oaloVlYxhiywx3IaS8V3s1dlZbeQljM5tV58dh60QwFvuPaDYo4xgYFbOEiVSxPI19vzv2L1FcVuW3SQ"
+              alt="Crumbly artisanal molten chocolate lava cookie editorial still"
+              className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105 opacity-95"
+              src={HERO_POSTER}
             />
+
+            {/* Critical Hero Video Reel */}
+            {!videoError && (
+              <video
+                ref={videoRef}
+                src="/assets/video_website_landing/01.mp4"
+                poster={HERO_POSTER}
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="auto"
+                onCanPlay={() => {
+                  onHeroVideoReady?.();
+                  videoRef.current?.play().catch(() => {});
+                }}
+                onError={() => {
+                  setVideoError(true);
+                  onHeroVideoError?.();
+                }}
+                className="relative z-[1] w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105 opacity-90"
+              />
+            )}
+
             {/* Scrim overlay */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#2b1712]/90 via-[#2b1712]/25 to-transparent pointer-events-none" />
+            <div className="absolute inset-0 z-[2] bg-gradient-to-t from-[#2b1712]/90 via-[#2b1712]/25 to-transparent pointer-events-none" />
+
 
             {/* Badges in Top Left */}
-            <div className="absolute top-4 left-4 md:top-6 md:left-6 flex flex-wrap items-center gap-2">
+            <div className="absolute top-4 left-4 md:top-6 md:left-6 z-[3] flex flex-wrap items-center gap-2">
               <span className="bg-[#fff8f1]/90 backdrop-blur-md text-[#2b1712] font-sans text-[11px] uppercase tracking-[0.2em] px-3 py-1.5 rounded font-semibold shadow-sm">
                 Fresh Batch Out Now
               </span>
@@ -138,7 +212,7 @@ export const Hero: React.FC<HeroProps> = ({
             </div>
 
             {/* Interactive Play Video Center Aesthetic */}
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="absolute inset-0 z-[3] flex items-center justify-center">
               <button
                 onClick={onOpenVideo}
                 aria-label="Play 4K Atelier Film"
@@ -149,7 +223,7 @@ export const Hero: React.FC<HeroProps> = ({
             </div>
 
             {/* Bottom Label Tag */}
-            <div className="absolute bottom-4 left-4 right-4 md:bottom-6 md:left-6 md:right-6 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[#fff8f1]">
+            <div className="absolute bottom-4 left-4 right-4 md:bottom-6 md:left-6 md:right-6 z-[3] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[#fff8f1]">
               <div>
                 <span className="font-sans text-[11px] uppercase tracking-[0.25em] text-[#efe7dc] opacity-90 block">
                   Cinematic Reel Feature
@@ -166,6 +240,7 @@ export const Hero: React.FC<HeroProps> = ({
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
+
           </div>
         </div>
       </div>

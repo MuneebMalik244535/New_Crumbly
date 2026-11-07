@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import Lenis from 'lenis';
+import 'lenis/dist/lenis.css';
 import { PRODUCTS } from './data/products';
 import { Product, CartItem, CategoryType } from './types';
 import { Navbar } from './components/Navbar';
@@ -18,6 +20,8 @@ import { Footer } from './components/Footer';
 import { ProductDetailDrawer } from './components/ProductDetailDrawer';
 import { CartDrawer } from './components/CartDrawer';
 import { VideoModal } from './components/VideoModal';
+import { FullScreenCinemaIntro } from './components/FullScreenCinemaIntro';
+import SceneOneScrollSequence from './components/SceneOneScrollSequence';
 
 export default function App() {
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -37,6 +41,54 @@ export default function App() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [isVideoOpen, setIsVideoOpen] = useState<boolean>(false);
+
+  // Cinematic Full Screen Video Experience: Black Loading Screen -> Full Screen Video -> Website
+  const [isCinemaIntroOpen, setIsCinemaIntroOpen] = useState<boolean>(true);
+  const lenisRef = useRef<Lenis | null>(null);
+
+  // ── Global Butter-Smooth Inertial Scroll Engine (Lenis) ───────────────────
+  useEffect(() => {
+    const lenis = new Lenis({
+      duration: 1.75, // Ultra-luxurious liquid momentum glide
+      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)), // Silky exponential curve
+      orientation: 'vertical',
+      gestureOrientation: 'vertical',
+      smoothWheel: true,
+      wheelMultiplier: 0.95, // Calibrated so wheel notches don't jump frames
+      touchMultiplier: 1.6,
+    });
+    lenisRef.current = lenis;
+    (window as any).__lenis = lenis;
+
+    let rafId: number;
+    function raf(time: number) {
+      lenis.raf(time);
+      rafId = requestAnimationFrame(raf);
+    }
+    rafId = requestAnimationFrame(raf);
+
+    if (isCinemaIntroOpen) {
+      lenis.stop();
+    }
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      lenis.destroy();
+      lenisRef.current = null;
+      delete (window as any).__lenis;
+    };
+  }, []); // Run once on mount to preserve persistent momentum state
+
+  // Control Lenis when cinema intro opens/closes without recreating the instance
+  useEffect(() => {
+    const lenis = lenisRef.current;
+    if (!lenis) return;
+    if (isCinemaIntroOpen) {
+      lenis.stop();
+    } else {
+      lenis.start();
+    }
+  }, [isCinemaIntroOpen]);
 
   // Cart operations
   const handleAddToCart = (
@@ -109,9 +161,17 @@ export default function App() {
     setActiveSection(sectionId);
     const element = document.getElementById(sectionId);
     if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
+      if (lenisRef.current) {
+        lenisRef.current.scrollTo(element, { offset: -20, duration: 1.2 });
+      } else {
+        element.scrollIntoView({ behavior: 'smooth' });
+      }
     } else {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      if (lenisRef.current) {
+        lenisRef.current.scrollTo(0, { duration: 1.2 });
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
     }
   };
 
@@ -125,6 +185,20 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#fff8f1] text-[#1e1b15] font-sans selection:bg-[#ffdcc3] selection:text-[#2f1500]">
+      {/* Cinematic Full Screen Video & Black Loading Screen */}
+      <FullScreenCinemaIntro
+        isOpen={isCinemaIntroOpen}
+        onClose={() => {
+          // Reset scroll to 0 so Scene 1 starts from frame_001
+          window.scrollTo(0, 0);
+          if (lenisRef.current) {
+            lenisRef.current.scrollTo(0, { immediate: true });
+            lenisRef.current.start();
+          }
+          setIsCinemaIntroOpen(false);
+        }}
+      />
+
       {/* Fixed Luxury Navigation */}
       <Navbar
         cart={cart}
@@ -133,14 +207,20 @@ export default function App() {
         onNavigate={handleNavigate}
       />
 
-      {/* Main Sections Stack matching the attached lookbook */}
-      <main className="pt-28 md:pt-32">
+      {/* Main Sections Stack matching the lookbook */}
+      <main>
+        {/* SCENE 1: CINEMATIC SCROLL FRAME SEQUENCE
+            Sticky canvas pinned while user scrolls through Scene 1.
+            Scroll down = forward frames, scroll up = reverse.
+            Releases naturally after final frame; Hero section follows. */}
+        <SceneOneScrollSequence />
+
         {/* SECTION 1: HERO */}
-        <div id="home">
+        <div id="home" className="pt-28 md:pt-32">
           <Hero
             onOrderNow={() => handleNavigate('menu')}
             onExploreSignatures={() => handleNavigate('signatures')}
-            onOpenVideo={() => setIsVideoOpen(true)}
+            onOpenVideo={() => setIsCinemaIntroOpen(true)}
             onOpenBoxBuilder={() => handleNavigate('box-builder')}
           />
         </div>

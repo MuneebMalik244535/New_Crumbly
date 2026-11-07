@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { X, Volume2, VolumeX, Play, Pause, Sparkles, Flame } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Volume2, VolumeX, Play, Pause } from 'lucide-react';
 
 interface VideoModalProps {
   isOpen: boolean;
@@ -9,17 +9,67 @@ interface VideoModalProps {
 export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
-  const [progress, setProgress] = useState(15);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (!isOpen) return;
-    const interval = setInterval(() => {
-      if (isPlaying) {
-        setProgress((prev) => (prev >= 100 ? 0 : prev + 1));
+    if (isOpen) {
+      setIsPlaying(true);
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+        videoRef.current.play().catch(() => {});
       }
-    }, 150);
-    return () => clearInterval(interval);
-  }, [isOpen, isPlaying]);
+    } else {
+      if (videoRef.current) {
+        videoRef.current.pause();
+      }
+    }
+  }, [isOpen]);
+
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      videoRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    }
+  };
+
+  const toggleMute = () => {
+    if (!videoRef.current) return;
+    videoRef.current.muted = !isMuted;
+    setIsMuted(!isMuted);
+  };
+
+  const handleTimeUpdate = () => {
+    if (!videoRef.current) return;
+    setCurrentTime(videoRef.current.currentTime);
+  };
+
+  const handleLoadedMetadata = () => {
+    if (!videoRef.current) return;
+    setDuration(videoRef.current.duration || 0);
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!videoRef.current || duration === 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = (e.clientX - rect.left) / rect.width;
+    const target = pos * duration;
+    videoRef.current.currentTime = target;
+    setCurrentTime(target);
+  };
+
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
 
   if (!isOpen) return null;
 
@@ -43,7 +93,8 @@ export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center text-white"
+            aria-label="Close video reel"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center text-white cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -51,12 +102,17 @@ export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
 
         {/* Video Canvas Container */}
         <div className="relative aspect-video w-full bg-black overflow-hidden group">
-          <img
-            alt="Cinematic macro dessert camera still"
-            src="https://lh3.googleusercontent.com/aida-public/AB6AXuAf62-MBF3siEdhWLMngD_I3DOIkSB5v3UIUapbjdw66XAh5qWj3xCgz-S-erxidOUlRdJdvvBhQzD7NG-qrb4fhJIyqB8-K09wm0yiHuHmUPxEsFhl6IKODPblhxVlNRHVrBreyd5b2EyM8NT-4yMMkTL7UpwdykP28UDRJKdn5etWclChK3kKX7eydZzeib46XtKFP9pTvufxVKASyDmpoSM_Zt8Q-tpkZZ3f7CnJYuIIa5jqMvdcMg"
-            className={`w-full h-full object-cover transition-transform duration-[8000ms] ease-out ${
-              isPlaying ? 'scale-110' : 'scale-100'
-            }`}
+          <video
+            ref={videoRef}
+            src="/assets/video_website_landing/01.mp4"
+            poster="https://lh3.googleusercontent.com/aida-public/AB6AXuAf62-MBF3siEdhWLMngD_I3DOIkSB5v3UIUapbjdw66XAh5qWj3xCgz-S-erxidOUlRdJdvvBhQzD7NG-qrb4fhJIyqB8-K09wm0yiHuHmUPxEsFhl6IKODPblhxVlNRHVrBreyd5b2EyM8NT-4yMMkTL7UpwdykP28UDRJKdn5etWclChK3kKX7eydZzeib46XtKFP9pTvufxVKASyDmpoSM_Zt8Q-tpkZZ3f7CnJYuIIa5jqMvdcMg"
+            autoPlay
+            playsInline
+            muted={isMuted}
+            loop
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            className="w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
 
@@ -72,11 +128,11 @@ export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
 
           {/* Play / Pause Large Center Overlay on Click */}
           <div
-            onClick={() => setIsPlaying(!isPlaying)}
+            onClick={togglePlay}
             className="absolute inset-0 flex items-center justify-center cursor-pointer"
           >
             {!isPlaying && (
-              <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center shadow-xl">
+              <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center shadow-xl hover:scale-110 transition-transform">
                 <Play className="w-8 h-8 fill-white text-white translate-x-0.5" />
               </div>
             )}
@@ -85,29 +141,34 @@ export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
           {/* Bottom Player Controls */}
           <div className="absolute bottom-4 left-6 right-6 flex flex-col gap-2">
             {/* Scrubber Bar */}
-            <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden cursor-pointer">
+            <div
+              onClick={handleSeek}
+              className="w-full h-1.5 bg-white/20 hover:h-2 rounded-full overflow-hidden cursor-pointer transition-all"
+            >
               <div
-                className="h-full bg-[#feb071] rounded-full transition-all duration-150"
-                style={{ width: `${progress}%` }}
+                className="h-full bg-[#feb071] rounded-full transition-all duration-75"
+                style={{ width: `${progressPercent}%` }}
               />
             </div>
 
             <div className="flex items-center justify-between text-xs font-sans text-[#efe7dc]">
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => setIsPlaying(!isPlaying)}
-                  className="hover:text-white transition-colors"
+                  onClick={togglePlay}
+                  className="hover:text-white transition-colors cursor-pointer"
                 >
                   {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 </button>
                 <button
-                  onClick={() => setIsMuted(!isMuted)}
-                  className="hover:text-white transition-colors flex items-center gap-1"
+                  onClick={toggleMute}
+                  className="hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                   <span>{isMuted ? 'Muted' : 'Atelier Sounds'}</span>
                 </button>
-                <span className="font-mono text-[11px]">00:{progress.toString().padStart(2, '0')} / 01:00</span>
+                <span className="font-mono text-[11px]">
+                  {formatTime(currentTime)} / {formatTime(duration || 60)}
+                </span>
               </div>
 
               <div className="flex items-center gap-2">
