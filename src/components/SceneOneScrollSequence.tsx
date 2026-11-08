@@ -55,8 +55,16 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   // Status: 0 = idle, 1 = loading, 2 = ready
   const loadStateRef    = useRef<Uint8Array>(new Uint8Array(TOTAL_FRAME_COUNT));
 
+  // Cached 2D canvas context for zero-allocation rendering
+  const ctxRef          = useRef<CanvasRenderingContext2D | null>(null);
+
   // Last successfully rendered image (for ultra-smooth hold buffer without flickering)
   const lastDrawnImgRef = useRef<HTMLImageElement | null>(null);
+
+  // Concurrent Priority Queue Loader (6 parallel HTTP/2 streams)
+  const MAX_CONCURRENT  = 6;
+  const activeLoadsRef  = useRef(0);
+  const queueRef        = useRef<number[]>([]);
 
   // State kept strictly in refs for zero React re-renders during scrub
   const targetProgress  = useRef(0);
@@ -73,7 +81,7 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     if (direct && direct.complete && direct.naturalWidth > 0) return direct;
 
     // Search outward for the closest loaded frame (preferring previous frame for continuity)
-    for (let r = 1; r < 30; r++) {
+    for (let r = 1; r < 40; r++) {
       const prev = targetIdx - r;
       if (prev >= 0) {
         const img = framesRef.current[prev];
@@ -129,7 +137,10 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     // Skip drawing if already on this exact frame and it was painted
     if (frameIdx === lastDrawnIdx.current && lastDrawnImgRef.current) return;
 
-    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctxRef.current) {
+      ctxRef.current = canvas.getContext('2d', { alpha: false });
+    }
+    const ctx = ctxRef.current;
     if (!ctx) return;
 
     const cw = canvas.width;
@@ -146,10 +157,6 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     const ih = targetImg.naturalHeight;
 
     // ── Perfect Proportional Aspect Fit (Zero Cropping on Mobile & Desktop) ──
-    // Uses aspect containment so the entire 1920x1080 frame is 100% visible:
-    // - On desktop/laptop: The top banner ("BAKED TO MAKE YOU CRUMBLE") and character
-    //   are NEVER cut off or clipped at the top/bottom.
-    // - On mobile: The character fits naturally across the screen with zero cutoff.
     const scale = Math.min(cw / iw, ch / ih);
 
     const dw = Math.round(iw * scale);
@@ -230,60 +237,84 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     rafId.current = requestAnimationFrame(tick);
   }, [paint, onComplete]);
 
-  // ── High-Performance On-Demand Frame Loader ──────────────────────────────
-  const loadFrame = useCallback((idx: number) => {
-    if (idx < 0 || idx >= TOTAL_FRAME_COUNT) return;
-    if (loadStateRef.current[idx] !== 0) return; // already loading or loaded
+  // ── High-Speed Priority Preloader Pool (6 Concurrent HTTP/2 Streams) ─────
+  const processQueue = useCallback(() => {
+    while (activeLoadsRef.current < MAX_CONCURRENT && queueRef.current.length > 0) {
+      const nextIdx = queueRef.current.shift()!;
+      if (loadStateRef.current[nextIdx] !== 0) continue; // Already loaded or in flight
 
-    loadStateRef.current[idx] = 1; // Mark loading
-    const meta = ALL_FRAMES[idx];
-    if (!meta) return;
+      loadStateRef.current[nextIdx] = 1; // Mark in flight
+      activeLoadsRef.current++;
 
-    const img = new Image();
-    img.src = meta.src;
-
-    img.onload = () => {
-      framesRef.current[idx] = img;
-      loadStateRef.current[idx] = 2; // Ready
-
-      if (idx === 0 && lastDrawnIdx.current === -1) {
-        paint(0);
+      const meta = ALL_FRAMES[nextIdx];
+      if (!meta) {
+        activeLoadsRef.current--;
+        continue;
       }
 
-      // Repaint if user is at or next to this frame
-      const currentTarget = Math.round(currentProgress.current * (TOTAL_FRAME_COUNT - 1));
-      if (Math.abs(currentTarget - idx) <= 1) {
-        lastDrawnIdx.current = -1;
-        paint(currentProgress.current);
-      }
-    };
+      const img = new Image();
+      img.src = meta.src;
 
-    img.onerror = () => {
-      loadStateRef.current[idx] = 0; // Allow retry on network blip
-    };
+      img.onload = () => {
+        framesRef.current[nextIdx] = img;
+        loadStateRef.current[nextIdx] = 2; // Ready
+        activeLoadsRef.current--;
+
+        if (nextIdx === 0 && lastDrawnIdx.current === -1) {
+          paint(0);
+        }
+
+        // Repaint instantly if user is currently near this frame
+        const currentTarget = Math.round(currentProgress.current * (TOTAL_FRAME_COUNT - 1));
+        if (Math.abs(currentTarget - nextIdx) <= 1) {
+          lastDrawnIdx.current = -1;
+          paint(currentProgress.current);
+        }
+
+        processQueue();
+      };
+
+      img.onerror = () => {
+        loadStateRef.current[nextIdx] = 0; // Allow retry
+        activeLoadsRef.current--;
+        processQueue();
+      };
+    }
   }, [paint]);
 
-  // ── Proximity Sliding-Window Loader & Cache Pruning ──────────────────────
-  // Maintains an optimal ~30-frame window in memory (~120 MB RAM)
-  // Prevents browser tab freezes, GC thrashing, and memory crashes.
-  const ensureWindowLoaded = useCallback((centerIdx: number) => {
-    const start = Math.max(0, centerIdx - 10);
-    const end = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 25);
+  // ── Prioritize Frames in Front of User's Scroll Trajectory ─────────────────
+  const prioritizeWindow = useCallback((centerIdx: number) => {
+    const urgent: number[] = [];
+    const upcoming: number[] = [];
+    const behind: number[] = [];
+    const rest: number[] = [];
 
-    for (let i = start; i <= end; i++) {
-      loadFrame(i);
+    // Priority 1: Next 60 frames ahead of current scroll
+    const aheadEnd = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 60);
+    for (let i = centerIdx; i <= aheadEnd; i++) {
+      if (loadStateRef.current[i] === 0) urgent.push(i);
     }
 
-    // Release distant frames from memory (browser disk cache retains them for <1ms reload if user scrolls back)
-    const pruneStart = centerIdx - 25;
-    const pruneEnd = centerIdx + 40;
-    for (let i = 0; i < TOTAL_FRAME_COUNT; i++) {
-      if ((i < pruneStart || i > pruneEnd) && framesRef.current[i] !== null) {
-        framesRef.current[i] = null;
-        loadStateRef.current[i] = 0;
-      }
+    // Priority 2: 15 frames behind current scroll (in case user reverses)
+    const behindStart = Math.max(0, centerIdx - 15);
+    for (let i = centerIdx - 1; i >= behindStart; i--) {
+      if (loadStateRef.current[i] === 0) behind.push(i);
     }
-  }, [loadFrame]);
+
+    // Priority 3: Remaining frames forward
+    for (let i = aheadEnd + 1; i < TOTAL_FRAME_COUNT; i++) {
+      if (loadStateRef.current[i] === 0) upcoming.push(i);
+    }
+
+    // Priority 4: Remaining frames backward
+    for (let i = 0; i < behindStart; i++) {
+      if (loadStateRef.current[i] === 0) rest.push(i);
+    }
+
+    // Reconstruct queue with prioritized order (never drops loaded frames)
+    queueRef.current = [...urgent, ...behind, ...upcoming, ...rest];
+    processQueue();
+  }, [processQueue]);
 
   // ── Calculate Progress from Scroll Coordinate ─────────────────────────────
   const updateProgress = useCallback((scrollY: number) => {
@@ -302,42 +333,32 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
 
     targetProgress.current = clamped;
 
-    // Trigger lookahead loader for upcoming frames
+    // Direct priority reload for 60 frames ahead of scroll
     const centerIdx = Math.round(clamped * (TOTAL_FRAME_COUNT - 1));
-    ensureWindowLoaded(centerIdx);
+    prioritizeWindow(centerIdx);
 
     if (!isLoopRunning.current) {
       isLoopRunning.current = true;
       rafId.current = requestAnimationFrame(tick);
     }
-  }, [tick, ensureWindowLoaded]);
+  }, [tick, prioritizeWindow]);
 
-  // ── Lifecycle & Scroll Event Binding (Only Runs When Active) ─────────────
+  // ── Lifecycle & Scroll Event Binding ─────────────────────────────────────
   useEffect(() => {
-    // If intro cinema video is playing, remain completely idle so video gets 100% bandwidth & CPU
+    // Start preloading Scene 1 (frames 0 to 60) immediately so they are 100% ready
+    prioritizeWindow(0);
+  }, [prioritizeWindow]);
+
+  useEffect(() => {
     if (!isActive) return;
 
     sizeCanvas();
 
-    // 1. Instantly load initial 20 frames of Scene 1 for instant response
-    for (let i = 0; i < Math.min(20, TOTAL_FRAME_COUNT); i++) {
-      loadFrame(i);
-    }
+    // Prioritize frames at current progress
+    const centerIdx = Math.round(targetProgress.current * (TOTAL_FRAME_COUNT - 1));
+    prioritizeWindow(centerIdx);
 
-    // 2. Gentle background trickle loader (1 frame every 120ms, non-blocking)
-    let idleTimer: any;
-    let trickleIdx = 20;
-
-    const trickleUpcoming = () => {
-      if (trickleIdx >= TOTAL_FRAME_COUNT) return;
-      loadFrame(trickleIdx);
-      trickleIdx += 1;
-      idleTimer = setTimeout(trickleUpcoming, 120);
-    };
-
-    idleTimer = setTimeout(trickleUpcoming, 400);
-
-    // 3. Connect single-channel scroll listener (Lenis prioritized)
+    // Connect single-channel scroll listener (Lenis prioritized)
     const lenis = (window as any).__lenis;
     let cleanupScroll: (() => void) | null = null;
 
@@ -362,12 +383,11 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     window.addEventListener('resize', sizeCanvas);
 
     return () => {
-      clearTimeout(idleTimer);
       if (cleanupScroll) cleanupScroll();
       window.removeEventListener('resize', sizeCanvas);
       cancelAnimationFrame(rafId.current);
     };
-  }, [isActive, updateProgress, sizeCanvas, loadFrame]);
+  }, [isActive, updateProgress, sizeCanvas, prioritizeWindow]);
 
   // ── Skip Sequence Directly to Website ────────────────────────────────────
   const handleSkip = () => {
