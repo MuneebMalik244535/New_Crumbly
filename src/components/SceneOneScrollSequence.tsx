@@ -25,9 +25,9 @@ import { ALL_FRAMES, SCENE_METADATA, TOTAL_FRAME_COUNT } from '../data/sceneFram
 const SCROLL_MULTIPLIER = 18.5;
 
 /**
- * Inertial Flywheel Damping (0.08 = heavy, weighted luxury camera dolly glide).
+ * Inertial Flywheel Damping (0.32 = responsive liquid video scrub; syncs with Lenis).
  */
-const DAMPING = 0.08;
+const DAMPING = 0.32;
 
 interface SceneOneScrollSequenceProps {
   /** Called once when the user reaches the very last frame */
@@ -52,6 +52,9 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   // Status: 0 = idle, 1 = loading, 2 = ready
   const loadStateRef    = useRef<Uint8Array>(new Uint8Array(TOTAL_FRAME_COUNT));
 
+  // Last successfully rendered image (for ultra-smooth hold buffer without flickering)
+  const lastDrawnImgRef = useRef<HTMLImageElement | null>(null);
+
   // State kept strictly in refs for zero React re-renders during scrub
   const targetProgress  = useRef(0);
   const currentProgress = useRef(0);
@@ -59,16 +62,15 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   const rafId           = useRef(0);
   const doneFired       = useRef(false);
   const currentSceneIdx = useRef(1);
-  const lastDrawnFloat  = useRef(-1);
+  const lastDrawnIdx    = useRef(-1);
 
   // ── Find Nearest Available Loaded Frame (Instant Fallback) ───────────────
   const findNearestLoaded = useCallback((targetIdx: number): HTMLImageElement | null => {
     const direct = framesRef.current[targetIdx];
     if (direct && direct.complete && direct.naturalWidth > 0) return direct;
 
-    // Fast local search (out to ±35 frames)
-    const maxRadius = Math.min(45, TOTAL_FRAME_COUNT);
-    for (let r = 1; r < maxRadius; r++) {
+    // Search outward for the closest loaded frame (preferring previous frame for continuity)
+    for (let r = 1; r < 30; r++) {
       const prev = targetIdx - r;
       if (prev >= 0) {
         const img = framesRef.current[prev];
@@ -80,15 +82,11 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
         if (img && img.complete && img.naturalWidth > 0) return img;
       }
     }
-    // Global search
-    for (let i = 0; i < TOTAL_FRAME_COUNT; i++) {
-      const img = framesRef.current[i];
-      if (img && img.complete && img.naturalWidth > 0) return img;
-    }
-    return null;
+
+    return lastDrawnImgRef.current;
   }, []);
 
-  // ── Sub-Frame Interpolated Canvas Render with Mobile-Aware Framing ────────
+  // ── True Video-Style Crisp Canvas Render (Zero Ghosting, Zero Cropping) ──
   const paint = useCallback((progress: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -96,12 +94,10 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     // Landing buffer: Final scene holds steady across the final 2%
     const frameProgress = Math.min(1, progress / 0.98);
     const floatIdx = Math.max(0, Math.min(TOTAL_FRAME_COUNT - 1, frameProgress * (TOTAL_FRAME_COUNT - 1)));
-    const baseIdx  = Math.floor(floatIdx);
-    const nextIdx  = Math.min(TOTAL_FRAME_COUNT - 1, baseIdx + 1);
-    const fraction = floatIdx - baseIdx; // 0.00 to 1.00
+    const frameIdx = Math.round(floatIdx);
 
-    // Update UI elements based on current base index
-    const currentFrameMeta = ALL_FRAMES[baseIdx];
+    // Update UI elements based on current frame index
+    const currentFrameMeta = ALL_FRAMES[frameIdx];
     if (currentFrameMeta && currentFrameMeta.sceneIndex !== currentSceneIdx.current) {
       currentSceneIdx.current = currentFrameMeta.sceneIndex;
       if (scenePillRef.current) {
@@ -127,8 +123,8 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
       scrollHintRef.current.style.pointerEvents = hintOpacity <= 0.05 ? 'none' : 'auto';
     }
 
-    // Skip drawing if position hasn't moved noticeably (< 0.006 of a frame)
-    if (Math.abs(floatIdx - lastDrawnFloat.current) < 0.006) return;
+    // Skip drawing if already on this exact frame and it was painted
+    if (frameIdx === lastDrawnIdx.current && lastDrawnImgRef.current) return;
 
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
@@ -137,57 +133,40 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     const ch = canvas.height;
     if (cw === 0 || ch === 0) return;
 
-    let baseImg = framesRef.current[baseIdx];
-    if (!baseImg || !baseImg.complete || !baseImg.naturalWidth) {
-      baseImg = findNearestLoaded(baseIdx);
+    let targetImg = framesRef.current[frameIdx];
+    if (!targetImg || !targetImg.complete || !targetImg.naturalWidth) {
+      targetImg = findNearestLoaded(frameIdx);
     }
-    if (!baseImg || !baseImg.complete || !baseImg.naturalWidth) return;
+    if (!targetImg || !targetImg.complete || !targetImg.naturalWidth) return;
 
-    const iw = baseImg.naturalWidth;
-    const ih = baseImg.naturalHeight;
+    const iw = targetImg.naturalWidth;
+    const ih = targetImg.naturalHeight;
 
-    // ── Responsive Mobile-Calibrated Scale ──
-    // On desktop/landscape: full-bleed cinematic cover.
-    // On mobile devices (portrait): calibrated to fit the 1920px frame with a 4% luxury margin ((cw * 0.96) / iw)
-    // so the entire 1710px wide headline ("ARE YOU READY TO ENJOY CRUMBLY")
-    // and 3D cookie characters are 100% fully visible with ZERO cutoff or oversize!
-    const isPortrait = (cw / ch) < 1.1;
-    const scale = isPortrait
-      ? (cw * 0.96) / iw
-      : Math.max(cw / iw, ch / ih);
+    // ── Perfect Proportional Aspect Fit (Zero Cropping on Mobile & Desktop) ──
+    // Uses aspect containment so the entire 1920x1080 frame is 100% visible:
+    // - On desktop/laptop: The top banner ("BAKED TO MAKE YOU CRUMBLE") and character
+    //   are NEVER cut off or clipped at the top/bottom.
+    // - On mobile: The character fits naturally across the screen with zero cutoff.
+    const scale = Math.min(cw / iw, ch / ih);
 
-    const dw = iw * scale;
-    const dh = ih * scale;
-    const dx = (cw - dw) * 0.5;
-    const dy = (ch - dh) * 0.5;
+    const dw = Math.round(iw * scale);
+    const dh = Math.round(ih * scale);
+    const dx = Math.round((cw - dw) * 0.5);
+    const dy = Math.round((ch - dh) * 0.5);
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Clear canvas before drawing so only the center character frame is rendered
-    ctx.clearRect(0, 0, cw, ch);
+    // Clear canvas to pure black background before drawing
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, cw, ch);
 
-    // 1. Draw base frame centered
+    // Draw single crisp video frame at 100% opacity (no ghosting or double exposure)
     ctx.globalAlpha = 1.0;
-    ctx.drawImage(baseImg, dx, dy, dw, dh);
+    ctx.drawImage(targetImg, dx, dy, dw, dh);
 
-    // 2. Sub-frame Cosine / Smoothstep Crossfade Blending:
-    // Blends frame N into frame N+1 based on the exact decimal fraction.
-    // Converts 30fps frames into 120 FPS continuous liquid visual flow!
-    if (baseIdx !== nextIdx && fraction > 0.015 && fraction < 0.985) {
-      let nextImg = framesRef.current[nextIdx];
-      if (!nextImg || !nextImg.complete || !nextImg.naturalWidth) {
-        nextImg = findNearestLoaded(nextIdx);
-      }
-      if (nextImg && nextImg.complete && nextImg.naturalWidth && nextImg !== baseImg) {
-        // Smoothstep S-curve: 3x^2 - 2x^3
-        const blend = fraction * fraction * (3 - 2 * fraction);
-        ctx.globalAlpha = blend;
-        ctx.drawImage(nextImg, dx, dy, dw, dh);
-      }
-    }
-
-    lastDrawnFloat.current = floatIdx;
+    lastDrawnIdx.current = frameIdx;
+    lastDrawnImgRef.current = targetImg;
   }, [findNearestLoaded]);
 
   // ── True Proportional Canvas Buffer (Zero Distortion on Mobile & Desktop) ─
@@ -210,7 +189,7 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     if (canvas.width !== targetW || canvas.height !== targetH) {
       canvas.width = targetW;
       canvas.height = targetH;
-      lastDrawnFloat.current = -1; // Force repaint
+      lastDrawnIdx.current = -1; // Force repaint
       paint(currentProgress.current);
     }
   }, [paint]);
@@ -219,8 +198,8 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   const tick = useCallback(() => {
     const diff = targetProgress.current - currentProgress.current;
 
-    // Halt when settled
-    if (Math.abs(diff) < 0.00008) {
+    // Halt when settled (within sub-pixel frame distance)
+    if (Math.abs(diff) < 0.0001) {
       currentProgress.current = targetProgress.current;
       paint(currentProgress.current);
       isLoopRunning.current = false;
@@ -234,7 +213,7 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
       return;
     }
 
-    // Heavy luxury flywheel momentum
+    // Responsive luxury momentum (syncs tightly with Lenis glide)
     currentProgress.current += diff * DAMPING;
     paint(currentProgress.current);
 
@@ -248,7 +227,7 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     rafId.current = requestAnimationFrame(tick);
   }, [paint, onComplete]);
 
-  // ── On-Demand Frame Loader for a Specific Index ───────────────────────────
+  // ── High-Performance On-Demand Frame Loader ──────────────────────────────
   const loadFrame = useCallback((idx: number) => {
     if (idx < 0 || idx >= TOTAL_FRAME_COUNT) return;
     if (loadStateRef.current[idx] !== 0) return; // already loading or loaded
@@ -260,37 +239,36 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     const img = new Image();
     img.src = meta.src;
 
-    const onReady = () => {
+    img.onload = () => {
       framesRef.current[idx] = img;
       loadStateRef.current[idx] = 2; // Ready
-      if (idx === 0) paint(0);
 
-      // Repaint if user is near this frame
+      if (idx === 0 && lastDrawnIdx.current === -1) {
+        paint(0);
+      }
+
+      // Repaint if user is at or next to this frame
       const currentTarget = Math.round(currentProgress.current * (TOTAL_FRAME_COUNT - 1));
       if (Math.abs(currentTarget - idx) <= 1) {
-        lastDrawnFloat.current = -1;
+        lastDrawnIdx.current = -1;
         paint(currentProgress.current);
       }
-    };
 
-    img.onload = () => {
+      // Pre-warm GPU texture decode asynchronously
       if ('decode' in img) {
-        img.decode().then(onReady).catch(onReady);
-      } else {
-        onReady();
+        img.decode().catch(() => {});
       }
     };
 
     img.onerror = () => {
-      loadStateRef.current[idx] = 0; // Allow retry
+      loadStateRef.current[idx] = 0; // Allow retry on network blip
     };
   }, [paint]);
 
-  // ── Proximity Window Loader (Focuses bandwidth right where user is) ────────
+  // ── Proximity Window Loader (Pre-fetches frames ahead in scroll direction) ─
   const ensureWindowLoaded = useCallback((centerIdx: number) => {
-    // Prioritize 10 frames back and 35 frames forward
     const start = Math.max(0, centerIdx - 10);
-    const end = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 35);
+    const end = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 45);
 
     for (let i = start; i <= end; i++) {
       loadFrame(i);
@@ -328,24 +306,25 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   useEffect(() => {
     sizeCanvas();
 
-    // 1. Instantly load initial 25 frames of Scene 1 (quick, instant start)
-    for (let i = 0; i < Math.min(25, TOTAL_FRAME_COUNT); i++) {
+    // 1. Instantly load initial 60 frames (Scenes 1 & 2 for instant start)
+    for (let i = 0; i < Math.min(60, TOTAL_FRAME_COUNT); i++) {
       loadFrame(i);
     }
 
-    // 2. Relaxed background trickle loader for remaining frames (idle queue)
+    // 2. High-speed background trickle loader for remaining frames (4 frames every 25ms)
     let idleTimer: any;
-    let trickleIdx = 25;
+    let trickleIdx = 60;
 
     const trickleUpcoming = () => {
       if (trickleIdx >= TOTAL_FRAME_COUNT) return;
-      loadFrame(trickleIdx);
-      loadFrame(trickleIdx + 1);
-      trickleIdx += 2;
-      idleTimer = setTimeout(trickleUpcoming, 100);
+      for (let k = 0; k < 4 && trickleIdx + k < TOTAL_FRAME_COUNT; k++) {
+        loadFrame(trickleIdx + k);
+      }
+      trickleIdx += 4;
+      idleTimer = setTimeout(trickleUpcoming, 25);
     };
 
-    idleTimer = setTimeout(trickleUpcoming, 350);
+    idleTimer = setTimeout(trickleUpcoming, 150);
 
     // 3. Connect single-channel scroll listener (Lenis prioritized)
     const lenis = (window as any).__lenis;
