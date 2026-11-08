@@ -79,16 +79,19 @@ export default function App() {
     };
   }, []); // Run once on mount to preserve persistent momentum state
 
-  // Control Lenis when cinema intro opens/closes without recreating the instance
+  // Control Lenis when cinema intro or video modal opens/closes without recreating the instance
   useEffect(() => {
     const lenis = lenisRef.current;
     if (!lenis) return;
-    if (isCinemaIntroOpen) {
+    if (isCinemaIntroOpen || isVideoOpen) {
       lenis.stop();
+      document.body.style.overflow = 'hidden';
     } else {
       lenis.start();
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
     }
-  }, [isCinemaIntroOpen]);
+  }, [isCinemaIntroOpen, isVideoOpen]);
 
   // Cart operations
   const handleAddToCart = (
@@ -189,7 +192,8 @@ export default function App() {
       <FullScreenCinemaIntro
         isOpen={isCinemaIntroOpen}
         onClose={() => {
-          // Reset scroll to 0 so Scene 1 starts from frame_001
+          document.body.style.overflow = '';
+          document.documentElement.style.overflow = '';
           window.scrollTo(0, 0);
           if (lenisRef.current) {
             lenisRef.current.scrollTo(0, { immediate: true });
@@ -220,7 +224,7 @@ export default function App() {
           <Hero
             onOrderNow={() => handleNavigate('menu')}
             onExploreSignatures={() => handleNavigate('signatures')}
-            onOpenVideo={() => setIsCinemaIntroOpen(true)}
+            onOpenVideo={() => setIsVideoOpen(true)}
             onOpenBoxBuilder={() => handleNavigate('box-builder')}
           />
         </div>

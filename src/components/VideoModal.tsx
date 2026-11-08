@@ -16,16 +16,38 @@ export const VideoModal: React.FC<VideoModalProps> = ({ isOpen, onClose }) => {
   useEffect(() => {
     if (isOpen) {
       setIsPlaying(true);
+      document.body.style.overflow = 'hidden';
       if (videoRef.current) {
         videoRef.current.currentTime = 0;
         videoRef.current.play().catch(() => {});
       }
     } else {
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
       if (videoRef.current) {
         videoRef.current.pause();
       }
     }
+
+    return () => {
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
+    };
   }, [isOpen]);
+
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;

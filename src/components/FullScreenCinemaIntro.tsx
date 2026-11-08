@@ -52,10 +52,10 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
   // its frame position while the intro video is playing.
   useEffect(() => {
     if (!isOpen) return;
-    const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      document.body.style.overflow = prev;
+      document.body.style.overflow = '';
+      document.documentElement.style.overflow = '';
     };
   }, [isOpen]);
 
@@ -82,6 +82,8 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
   const handleEnterSite = useCallback(() => {
     if (isExitingToSite) return;
     setIsExitingToSite(true);
+    document.body.style.overflow = '';
+    document.documentElement.style.overflow = '';
     window.scrollTo(0, 0);
     if (videoRef.current) {
       videoRef.current.pause();
