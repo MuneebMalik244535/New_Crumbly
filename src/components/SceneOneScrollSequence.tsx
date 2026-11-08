@@ -32,10 +32,13 @@ const DAMPING = 0.32;
 interface SceneOneScrollSequenceProps {
   /** Called once when the user reaches the very last frame */
   onComplete?: () => void;
+  /** Whether the sequence is active (false while cinema intro is playing) */
+  isActive?: boolean;
 }
 
 export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
   onComplete,
+  isActive = true,
 }) => {
   // DOM refs
   const sectionRef      = useRef<HTMLDivElement>(null);
@@ -253,11 +256,6 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
         lastDrawnIdx.current = -1;
         paint(currentProgress.current);
       }
-
-      // Pre-warm GPU texture decode asynchronously
-      if ('decode' in img) {
-        img.decode().catch(() => {});
-      }
     };
 
     img.onerror = () => {
@@ -265,13 +263,25 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     };
   }, [paint]);
 
-  // ── Proximity Window Loader (Pre-fetches frames ahead in scroll direction) ─
+  // ── Proximity Sliding-Window Loader & Cache Pruning ──────────────────────
+  // Maintains an optimal ~30-frame window in memory (~120 MB RAM)
+  // Prevents browser tab freezes, GC thrashing, and memory crashes.
   const ensureWindowLoaded = useCallback((centerIdx: number) => {
     const start = Math.max(0, centerIdx - 10);
-    const end = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 45);
+    const end = Math.min(TOTAL_FRAME_COUNT - 1, centerIdx + 25);
 
     for (let i = start; i <= end; i++) {
       loadFrame(i);
+    }
+
+    // Release distant frames from memory (browser disk cache retains them for <1ms reload if user scrolls back)
+    const pruneStart = centerIdx - 25;
+    const pruneEnd = centerIdx + 40;
+    for (let i = 0; i < TOTAL_FRAME_COUNT; i++) {
+      if ((i < pruneStart || i > pruneEnd) && framesRef.current[i] !== null) {
+        framesRef.current[i] = null;
+        loadStateRef.current[i] = 0;
+      }
     }
   }, [loadFrame]);
 
@@ -302,29 +312,30 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
     }
   }, [tick, ensureWindowLoaded]);
 
-  // ── Lifecycle & Scroll Event Binding (Single-Channel Driver) ─────────────
+  // ── Lifecycle & Scroll Event Binding (Only Runs When Active) ─────────────
   useEffect(() => {
+    // If intro cinema video is playing, remain completely idle so video gets 100% bandwidth & CPU
+    if (!isActive) return;
+
     sizeCanvas();
 
-    // 1. Instantly load initial 60 frames (Scenes 1 & 2 for instant start)
-    for (let i = 0; i < Math.min(60, TOTAL_FRAME_COUNT); i++) {
+    // 1. Instantly load initial 20 frames of Scene 1 for instant response
+    for (let i = 0; i < Math.min(20, TOTAL_FRAME_COUNT); i++) {
       loadFrame(i);
     }
 
-    // 2. High-speed background trickle loader for remaining frames (4 frames every 25ms)
+    // 2. Gentle background trickle loader (1 frame every 120ms, non-blocking)
     let idleTimer: any;
-    let trickleIdx = 60;
+    let trickleIdx = 20;
 
     const trickleUpcoming = () => {
       if (trickleIdx >= TOTAL_FRAME_COUNT) return;
-      for (let k = 0; k < 4 && trickleIdx + k < TOTAL_FRAME_COUNT; k++) {
-        loadFrame(trickleIdx + k);
-      }
-      trickleIdx += 4;
-      idleTimer = setTimeout(trickleUpcoming, 25);
+      loadFrame(trickleIdx);
+      trickleIdx += 1;
+      idleTimer = setTimeout(trickleUpcoming, 120);
     };
 
-    idleTimer = setTimeout(trickleUpcoming, 150);
+    idleTimer = setTimeout(trickleUpcoming, 400);
 
     // 3. Connect single-channel scroll listener (Lenis prioritized)
     const lenis = (window as any).__lenis;
@@ -356,7 +367,7 @@ export const SceneOneScrollSequence: React.FC<SceneOneScrollSequenceProps> = ({
       window.removeEventListener('resize', sizeCanvas);
       cancelAnimationFrame(rafId.current);
     };
-  }, [updateProgress, sizeCanvas, loadFrame]);
+  }, [isActive, updateProgress, sizeCanvas, loadFrame]);
 
   // ── Skip Sequence Directly to Website ────────────────────────────────────
   const handleSkip = () => {

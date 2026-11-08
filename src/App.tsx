@@ -213,7 +213,7 @@ export default function App() {
             Sticky canvas pinned while user scrolls through Scene 1.
             Scroll down = forward frames, scroll up = reverse.
             Releases naturally after final frame; Hero section follows. */}
-        <SceneOneScrollSequence />
+        <SceneOneScrollSequence isActive={!isCinemaIntroOpen} />
 
         {/* SECTION 1: HERO */}
         <div id="home" className="pt-28 md:pt-32">

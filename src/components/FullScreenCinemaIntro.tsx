@@ -99,8 +99,9 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
     onVideoReady?.();
 
     if (videoRef.current) {
+      videoRef.current.muted = true;
       videoRef.current.play().catch(() => {
-        // Autoplay fallback if browser requires muted
+        // Autoplay policy fallback
         if (videoRef.current) {
           videoRef.current.muted = true;
           setIsMuted(true);
@@ -109,11 +110,11 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
       });
     }
 
-    // Smoothly dissolve black loading screen over 600ms
+    // Smoothly dissolve black loading screen over 400ms
     setIsLoaderFadingOut(true);
     setTimeout(() => {
       setIsLoading(false);
-    }, 600);
+    }, 400);
   }, [onVideoReady]);
 
   // Handle video error: fallback smoothly to site with poster
@@ -140,7 +141,7 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
   // Check if video is already ready in cache
   useEffect(() => {
     const video = videoRef.current;
-    if (video && video.readyState >= 3 && !hasStartedPlaybackRef.current) {
+    if (video && video.readyState >= 2 && !hasStartedPlaybackRef.current) {
       handleCanPlay();
     }
   }, [handleCanPlay]);
@@ -312,8 +313,10 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
     >
       {/* 1. PROPER FULL SCREEN VIDEO LAYER */}
       <div
-        onClick={handleEnterSite}
-        className="relative w-full h-full cursor-pointer select-none flex items-center justify-center overflow-hidden"
+        onWheel={(e) => {
+          if (e.deltaY > 25) handleEnterSite();
+        }}
+        className="relative w-full h-full select-none flex items-center justify-center overflow-hidden"
       >
         {/* Ambient warm chocolate blur backdrop for mobile portrait:
             Fills the screen with a soft luxury chocolate ambient glow,
@@ -344,6 +347,7 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
           playsInline
           preload="auto"
           onCanPlay={handleCanPlay}
+          onLoadedData={handleCanPlay}
           onError={handleVideoError}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
@@ -351,10 +355,24 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
           className="relative z-10 w-full h-full object-contain landscape:object-cover"
         />
 
-        {/* Minimal Icon Controls (NO TEXT OVERLAY) */}
+        {/* Center Play button if video is paused */}
+        {!isLoading && !isPlaying && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlay();
+            }}
+            aria-label="Play video"
+            className="absolute z-20 w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-black/60 hover:bg-black/80 border border-white/30 text-[#FEB071] flex items-center justify-center transition-all duration-300 hover:scale-110 shadow-2xl cursor-pointer"
+          >
+            <Play className="w-7 h-7 sm:w-9 sm:h-9 fill-[#FEB071] translate-x-0.5" />
+          </button>
+        )}
+
+        {/* Interactive Overlay Controls */}
         {!isLoading && (
           <>
-            {/* Top Right: Minimal Skip Icon Button (No Text) */}
+            {/* Top Right: Clear "Skip Intro" Button */}
             <div
               className="absolute z-20"
               style={{
@@ -367,14 +385,39 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
                   e.stopPropagation();
                   handleEnterSite();
                 }}
-                aria-label="Enter Website"
-                className="w-11 h-11 rounded-full bg-black/45 hover:bg-black/75 backdrop-blur-md border border-white/20 text-white flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 shadow-lg cursor-pointer"
+                aria-label="Skip to Story"
+                className="group px-4 py-2 sm:px-5 sm:py-2.5 rounded-full bg-black/60 hover:bg-[#FEB071] hover:text-[#180905] text-white text-xs font-semibold uppercase tracking-widest border border-white/20 hover:border-[#FEB071] backdrop-blur-md transition-all duration-300 shadow-xl flex items-center gap-2 cursor-pointer"
               >
-                <ArrowRight className="w-5 h-5 text-white" />
+                <span>Skip Intro</span>
+                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform duration-300" />
               </button>
             </div>
 
-            {/* Bottom Left: Minimal Audio Icon Toggle (No Text) */}
+            {/* Bottom Center: Radiant "ENTER CRUMBLY STORY" Action Button */}
+            <div
+              className="absolute z-20 flex flex-col items-center gap-2 pointer-events-auto select-none"
+              style={{
+                bottom: 'max(2.5rem, env(safe-area-inset-bottom, 2.5rem))',
+                left: '50%',
+                transform: 'translateX(-50%)',
+              }}
+            >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEnterSite();
+                }}
+                className="group px-7 py-3 sm:px-8 sm:py-3.5 rounded-full bg-gradient-to-r from-[#FEB071] via-[#FFDCC3] to-[#FEB071] hover:from-[#FFAE5D] hover:to-[#FEB071] text-[#221008] font-bold text-xs sm:text-sm uppercase tracking-[0.2em] shadow-[0_8px_32px_rgba(254,176,113,0.55)] hover:scale-105 active:scale-95 transition-all duration-300 flex items-center gap-2.5 cursor-pointer"
+              >
+                <span>Enter Crumbly Story</span>
+                <ArrowRight className="w-4 h-4 text-[#221008] group-hover:translate-x-1 transition-transform duration-300" />
+              </button>
+              <span className="text-[10px] sm:text-[11px] text-[#FFF7EC]/70 tracking-[0.22em] uppercase font-sans drop-shadow-md">
+                or scroll down to begin
+              </span>
+            </div>
+
+            {/* Bottom Left: Audio Icon Toggle */}
             <div
               className="absolute z-20"
               style={{
@@ -398,7 +441,7 @@ export const FullScreenCinemaIntro: React.FC<FullScreenCinemaIntroProps> = ({
               </button>
             </div>
 
-            {/* Bottom Edge: Slender Caramel Progress Line (No Text) */}
+            {/* Bottom Edge: Slender Caramel Progress Line */}
             <div
               className="absolute inset-x-0 z-20 h-[3px] bg-black/30"
               style={{
